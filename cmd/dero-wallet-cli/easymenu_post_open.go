@@ -521,12 +521,18 @@ func handle_easymenu_post_open_command(l *readline.Instance, line string) (proce
 			break
 		}
 
+		// NewXSWDServer default behavior is to Ask permission for all requests
 		xswd_server = xswd.NewXSWDServer(wallet, func(ad *xswd.ApplicationData) bool {
-			// TODO inform if it was already or not, and with permissions inside
+			// xswd logger informs if app is requesting permissions upon connection or if app is already connected
 			return ReadStringXSWDPrompt(l, ad.OnClose, fmt.Sprintf("Allow application %s (%s) to access your wallet (y/N): ", ad.Name, ad.Url), []string{"Y", "N"}) == "Y"
 		}, func(ad *xswd.ApplicationData, r *jrpc2.Request) xswd.Permission {
 			return AskPermissionForRequest(l, ad, r)
 		})
+		// check if start was successful
+		time.Sleep(time.Second)
+		if !xswd_server.IsRunning() {
+			xswd_server = nil
+		}
 	case "17":
 		if xswd_server == nil {
 			logger.Error(nil, "XSWD server is not running")
@@ -535,7 +541,14 @@ func handle_easymenu_post_open_command(l *readline.Instance, line string) (proce
 		apps := xswd_server.GetApplications()
 		logger.Info(fmt.Sprintf("XSWD Applications (%d):", len(apps)))
 		for _, app := range apps {
-			logger.Info("Application", "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url, "permissions", app.Permissions)
+			logger.Info("Application", "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url)
+			for name, perm := range app.Permissions {
+				logger.Info(fmt.Sprintf("Permission %s", app.Name), name, perm)
+			}
+
+			for event, sub := range app.RegisteredEvents {
+				logger.Info(fmt.Sprintf("Subscribed %s", app.Name), string(event), sub)
+			}
 		}
 
 	default:

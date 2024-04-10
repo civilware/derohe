@@ -861,7 +861,14 @@ func ReadStringXSWDPrompt(l *readline.Instance, onClose chan bool, prompt string
 	for !validValue {
 		go func() {
 			line, err := l.ReadPasswordWithConfig(conf)
-			if err != nil {
+			if err == readline.ErrInterrupt {
+				if len(line) == 0 {
+					logger.Info("Ctrl-C received, Exiting")
+					os.Exit(0)
+				}
+			} else if err == io.EOF {
+				os.Exit(0)
+			} else if err != nil {
 				logger.Error(err, "Error reading input")
 			}
 			value := strings.ToUpper(string(line))

@@ -123,7 +123,7 @@ func register_wallets(chain *blockchain.Blockchain) {
 
 		if v, ok := globals.Arguments["--use-xswd"]; ok && v.(bool) {
 			// XSWD server accept everything by default
-			xswd.NewXSWDServerWithPort(wallet_ports_xswd_start+i, wallets[i], func(app *xswd.ApplicationData) bool {
+			xswd.NewXSWDServerWithPort(wallet_ports_xswd_start+i, wallets[i], false, func(app *xswd.ApplicationData) bool {
 				return true
 			}, func(app *xswd.ApplicationData, request *jrpc2.Request) xswd.Permission {
 				return xswd.Allow

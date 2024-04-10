@@ -29,7 +29,7 @@ type ApplicationData struct {
 	Permissions      map[string]Permission `json:"permissions"`
 	Signature        []byte                `json:"signature"`
 	RegisteredEvents map[rpc.EventType]bool
-	// only init when accepted by user
+	// RegisteredEvents only init when accepted by user
 	OnClose      chan bool `json:"-"` // used to inform when the Session disconnect
 	isRequesting bool      `json:"-"`
 }
@@ -166,8 +166,12 @@ type XSWD struct {
 	wallet         *walletapi.Wallet_Disk
 	rpcHandler     handler.Map
 	running        bool
+	forceAsk       bool // forceAsk ensures no permissions can be accepted upon initial connection
 	requests       chan messageRequest
 	registers      chan messageRegistration
+	// context and cancel to cleanly exit handler_loop
+	ctx    context.Context
+	cancel context.CancelFunc
 	// mutex for applications map
 	sync.Mutex
 }
@@ -179,18 +183,26 @@ const XSWD_PORT = 44326
 
 // Create a new XSWD server which allows to connect any dApp to the wallet safely through a websocket
 // Each request done by the session will wait on the appHandler and requestHandler to be accepted
+// NewXSWDServer will default to forceAsk (call requestHandler) for all wallet method requests
 func NewXSWDServer(wallet *walletapi.Wallet_Disk, appHandler func(*ApplicationData) bool, requestHandler func(*ApplicationData, *jrpc2.Request) Permission) *XSWD {
-	return NewXSWDServerWithPort(XSWD_PORT, wallet, appHandler, requestHandler)
+	return NewXSWDServerWithPort(XSWD_PORT, wallet, true, appHandler, requestHandler)
 }
 
-func NewXSWDServerWithPort(port int, wallet *walletapi.Wallet_Disk, appHandler func(*ApplicationData) bool, requestHandler func(*ApplicationData, *jrpc2.Request) Permission) *XSWD {
+func NewXSWDServerWithPort(port int, wallet *walletapi.Wallet_Disk, forceAsk bool, appHandler func(*ApplicationData) bool, requestHandler func(*ApplicationData, *jrpc2.Request) Permission) *XSWD {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("XSWD server"))
 	})
 
+	ctx, cancel := context.WithCancel(context.Background())
 	server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
 	logger := globals.Logger.WithName("XSWD")
+
+	// Prevent crossover of custom methods to rpcserver
+	xswdHandler := make(handler.Map)
+	for k, v := range rpcserver.WalletHandler {
+		xswdHandler[k] = v
+	}
 
 	xswd := &XSWD{
 		applications:   make(map[*Connection]ApplicationData),
@@ -201,10 +213,13 @@ func NewXSWDServerWithPort(port int, wallet *walletapi.Wallet_Disk, appHandler f
 		context:        rpcserver.NewWalletContext(logger, wallet),
 		wallet:         wallet,
 		// don't create a different API, we provide the same
-		rpcHandler: rpcserver.WalletHandler,
+		rpcHandler: xswdHandler,
 		requests:   make(chan messageRequest),
 		registers:  make(chan messageRegistration),
 		running:    true,
+		forceAsk:   forceAsk,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	// Register event listeners
@@ -235,6 +250,8 @@ func NewXSWDServerWithPort(port int, wallet *walletapi.Wallet_Disk, appHandler f
 	xswd.SetCustomMethod("Subscribe", handler.New(Subscribe))
 	xswd.SetCustomMethod("Unsubscribe", handler.New(Unsubscribe))
 	xswd.SetCustomMethod("SignData", handler.New(SignData))
+	xswd.SetCustomMethod("CheckSignature", handler.New(CheckSignature))
+	xswd.SetCustomMethod("GetDaemon", handler.New(GetDaemon))
 
 	mux.HandleFunc("/xswd", xswd.handleWebSocket)
 	logger.Info("Starting XSWD server", "addr", server.Addr)
@@ -287,19 +304,21 @@ func (x *XSWD) handler_loop() {
 				}
 			}(msg)
 		case msg := <-x.registers:
-			response := x.addApplication(msg.request, msg.conn, msg.app)
-			if response {
+			response, accepted := x.addApplication(msg.request, msg.conn, msg.app)
+			if accepted {
 				msg.conn.Send(AuthorizationResponse{
-					Message:  "User has authorized the application",
+					Message:  response,
 					Accepted: true,
 				})
 			} else {
 				msg.conn.Send(AuthorizationResponse{
-					Message:  "User has rejected the application",
+					Message:  fmt.Sprintf("Could not connect the application: %s", response),
 					Accepted: false,
 				})
 				x.removeApplicationOfSession(msg.conn, msg.app)
 			}
+		case <-x.ctx.Done():
+			return
 		}
 	}
 }
@@ -315,6 +334,7 @@ func (x *XSWD) Stop() {
 	x.Lock()
 	defer x.Unlock()
 	x.running = false
+	x.cancel()
 
 	if err := x.server.Shutdown(context.Background()); err != nil {
 		x.logger.Error(err, "Error while stopping XSWD server")
@@ -385,30 +405,34 @@ func (x *XSWD) HasApplicationId(app_id string) bool {
 	return false
 }
 
-// Add an application from a websocket connection
-// it verify that application is valid and add it to the list
-func (x *XSWD) addApplication(r *http.Request, conn *Connection, app *ApplicationData) bool {
+// Add an application from a websocket connection,
+// it verifies that application is valid and will add it to the application list if user accepts the request
+func (x *XSWD) addApplication(r *http.Request, conn *Connection, app *ApplicationData) (response string, accepted bool) {
 	// Sanity check
 	{
 		id := strings.TrimSpace(app.Id)
 		if len(id) != 64 {
-			x.logger.V(1).Info("Invalid ID size")
-			return false
+			response = "Invalid ID size"
+			x.logger.V(1).Info(response, "ID", app.Id)
+			return
 		}
 
 		if _, err := hex.DecodeString(id); err != nil {
-			x.logger.V(1).Info("Invalid hexadecimal ID")
-			return false
+			response = "Invalid hexadecimal ID"
+			x.logger.V(1).Info(response, "ID", app.Id)
+			return
 		}
 
 		if len(strings.TrimSpace(app.Name)) == 0 || len(app.Name) > 255 || !isASCII(app.Name) {
-			x.logger.V(1).Info("Invalid name", "name", len(app.Name))
-			return false
+			response = "Invalid name"
+			x.logger.V(1).Info(response, "name", len(app.Name))
+			return
 		}
 
 		if len(strings.TrimSpace(app.Description)) == 0 || len(app.Description) > 255 || !isASCII(app.Description) {
-			x.logger.V(1).Info("Invalid description", "description", len(app.Description))
-			return false
+			response = "Invalid description"
+			x.logger.V(1).Info(response, "description", len(app.Description))
+			return
 		}
 
 		origin := r.Header.Get("Origin")
@@ -421,57 +445,124 @@ func (x *XSWD) addApplication(r *http.Request, conn *Connection, app *Applicatio
 
 		// Verify that the website url set is the same as origin (security check)
 		if len(origin) > 0 && app.Url != origin {
-			x.logger.V(1).Info("Invalid URL compared to origin", "origin", origin, "url", app.Url)
-			return false
+			response = "Invalid URL compared to origin"
+			x.logger.V(1).Info(response, "origin", origin, "url", app.Url)
+			return
 		}
 
 		// URL can be optional
 		if len(app.Url) > 255 {
-			x.logger.V(1).Info("Invalid URL", "url", len(app.Url))
-			return false
+			response = "Invalid URL"
+			x.logger.V(1).Info(response, "url", len(app.Url))
+			return
 		}
 
 		// Check that URL is starting with valid protocol
 		if !(strings.HasPrefix(app.Url, "http://") || strings.HasPrefix(app.Url, "https://")) {
-			x.logger.V(1).Info("Invalid application URL", "url", app.Url)
-			return false
+			response = "Invalid application URL"
+			x.logger.V(1).Info(response, "url", app.Url)
+			return
 		}
 
-		// Signature can be optional but permissions can't exist without signature
-		if app.Permissions != nil {
-			if (len(app.Permissions) > 0 && len(app.Signature) != 64) || len(app.Permissions) > 255 {
-				x.logger.V(1).Info("Invalid permissions", "permissions", len(app.Permissions))
-				return false
+		// Signature can be optional but if provided it must be valid for app to be added
+		// and is a requirement for permissions to be set upon initial connection
+		if len(app.Signature) > 0 {
+			if len(app.Signature) > 512 {
+				response = "Invalid signature size"
+				x.logger.V(1).Info(response, "signature", len(app.Signature))
+				return
+			}
+
+			signer, message, err := x.wallet.CheckSignature(app.Signature)
+			if err != nil {
+				response = "Invalid signature"
+				x.logger.V(1).Info(response, "signature", string(app.Signature))
+				return
+			}
+
+			if !signer.IsDERONetwork() {
+				response = "Signer does not belong to DERO network"
+				x.logger.V(1).Info(response, "signer", signer.String())
+				return
+			}
+
+			// Signature message must match app ID
+			mcheck := strings.TrimSpace(string(message))
+			if mcheck != app.Id {
+				response = "Signature does not match ID"
+				x.logger.V(1).Info(response, app.Id, mcheck)
+				return
+			}
+
+			x.logger.V(1).Info("Signature matches ID", app.Id, mcheck)
+		} else if app.Permissions != nil && len(app.Permissions) > 0 {
+			response = "Application is requesting permissions without signature"
+			x.logger.V(1).Info(response, app.Name, app.Id)
+			return
+		}
+
+		// Check that we don't already have this application
+		if x.HasApplicationId(app.Id) {
+			response = "Application ID already added"
+			return
+		}
+
+		// Check permission len
+		if len(app.Permissions) > 255 {
+			response = "Invalid permissions"
+			x.logger.V(1).Info(response, "permissions", len(app.Permissions))
+			return
+		}
+
+		x.logger.Info(fmt.Sprintf("Application %s (%s) is requesting access to your wallet", app.Name, app.Url))
+
+		// If forceAsk all permissions will default to Ask
+		if !x.forceAsk {
+			validPermissions := map[string]Permission{}
+			normalizedMethods := map[string]Permission{}
+
+			for n, p := range app.Permissions {
+				if strings.HasPrefix(n, "DERO.") {
+					x.logger.V(1).Info("Daemon requests are AlwaysAllow", n, p)
+					continue
+				}
+
+				// Ensure we are not storing Allow or Deny permissions as they return positive/negative
+				if p == Allow || p == Deny {
+					x.logger.V(1).Info("Invalid permission requested", n, p)
+					continue
+				}
+
+				// Always Ask for custom methods
+				if _, ok := x.rpcHandler[n]; !ok {
+					x.logger.V(1).Info("Invalid method requested", n, p)
+					continue
+				}
+
+				// Normalize all method names
+				normalized := strings.ToLower(strings.ReplaceAll(n, "_", ""))
+
+				// Ensure if permission is added already under another method name, it matches (GetAddress == getaddress)
+				if pcheck, ok := normalizedMethods[normalized]; ok && pcheck != p {
+					x.logger.V(1).Info("Conflicting permissions for", n, p)
+					continue
+				}
+
+				x.logger.Info("Permission requested for", n, p)
+				normalizedMethods[normalized] = p
+				validPermissions[n] = p
+			}
+
+			if len(validPermissions) > 0 {
+				app.Permissions = validPermissions
+			} else {
+				x.logger.Info("All wallet requests will Ask for your permission")
+				app.Permissions = map[string]Permission{}
 			}
 		} else {
+			x.logger.Info("All wallet requests will Ask for your permission")
 			app.Permissions = map[string]Permission{}
 		}
-
-		// Signature can be optional but verify its len
-		if len(app.Signature) > 0 {
-			if len(app.Signature) != 64 {
-				x.logger.Info("Invalid signature size", "signature", len(app.Signature))
-				return false
-			}
-
-			// TODO verify signature
-			/*signer, message, err := x.wallet.CheckSignature(app.Signature)
-			if err != nil {
-				x.logger.V(1).Info("Invalid signature", "signature", app.Signature)
-				return false
-			}
-
-			if signer.String() != x.wallet.GetAddress().String() {
-				x.logger.V(1).Info("Invalid signer")
-				return false
-			}*/
-		}
-
-	}
-
-	// Check that we don't already have this application
-	if x.HasApplicationId(app.Id) {
-		return false
 	}
 
 	// only one request at a time
@@ -483,6 +574,13 @@ func (x *XSWD) addApplication(r *http.Request, conn *Connection, app *Applicatio
 	app.SetIsRequesting(true)
 	if x.appHandler(app) {
 		app.SetIsRequesting(false)
+		// check if server has stopped while in appHandler
+		if !x.running {
+			conn.Close()
+			response = "XSWD is offline"
+			x.logger.Info(response, "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url)
+			return
+		}
 
 		// Create the map
 		app.RegisteredEvents = map[rpc.EventType]bool{}
@@ -491,14 +589,17 @@ func (x *XSWD) addApplication(r *http.Request, conn *Connection, app *Applicatio
 		x.applications[conn] = *app
 		x.Unlock()
 
-		x.logger.Info("Application accepted", "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url)
-		return true
+		accepted = true
+		response = "User has authorized the application"
+		x.logger.Info(response, "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url)
+		return
 	} else {
 		app.SetIsRequesting(false)
-		x.logger.Info("Application rejected", "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url)
+		response = "User has rejected connection request"
+		x.logger.Info(response, "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url)
 	}
 
-	return false
+	return
 }
 
 // Remove an application from the list for a session
@@ -551,14 +652,26 @@ func (x *XSWD) handleMessage(app *ApplicationData, request *jrpc2.Request) inter
 				// we set original ID
 				result.SetID(request.ID())
 
+				// Unmarshal result into response to sync wallet/daemon as RPCResponse type
+				var response interface{}
+				err = result.UnmarshalResult(&response)
+				if err != nil {
+					x.logger.V(1).Error(err, "Error on unmarshal daemon result")
+					return ResponseWithError(request, jrpc2.Errorf(code.InternalError, "Error on unmarshal daemon call: %q", err.Error()))
+				}
+
 				json, err := result.MarshalJSON()
 				if err != nil {
 					x.logger.V(1).Error(err, "Error on marshal daemon response")
-					return ResponseWithError(request, jrpc2.Errorf(code.InternalError, "Error on daemon call: %q", err.Error()))
+					return ResponseWithError(request, jrpc2.Errorf(code.InternalError, "Error on marshal daemon call: %q", err.Error()))
 				}
 
 				x.logger.V(2).Info("received response", "response", string(json))
-				return result
+
+				return ResponseWithResult(request, response)
+			} else {
+				x.logger.V(1).Info("Daemon is offline", "endpoint", x.wallet.Daemon_Endpoint)
+				return ResponseWithError(request, jrpc2.Errorf(code.Cancelled, "daemon %s is offline", x.wallet.Daemon_Endpoint))
 			}
 		}
 
@@ -654,7 +767,7 @@ func (x *XSWD) readMessageFromSession(conn *Connection, app *ApplicationData) {
 		// We only support one request at a time for permission request
 		if len(requests) != 1 {
 			x.logger.V(2).Error(nil, "Invalid number of requests")
-			if conn.Send(ResponseWithError(nil, jrpc2.Errorf(code.ParseError, "Batch are not supported"))); err != nil {
+			if err := conn.Send(ResponseWithError(nil, jrpc2.Errorf(code.ParseError, "Batch requests are not supported"))); err != nil {
 				return
 			}
 			continue
@@ -689,6 +802,7 @@ func (x *XSWD) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if x.HasApplicationId(app_data.Id) {
+		x.logger.Info("App ID is already used", "ID", app_data.Name)
 		conn.WriteJSON(AuthorizationResponse{
 			Message:  "App ID is already used",
 			Accepted: false,
