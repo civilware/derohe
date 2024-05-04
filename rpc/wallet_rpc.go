@@ -31,7 +31,7 @@ import (
 	"github.com/deroproject/derohe/cryptography/crypto"
 )
 
-// This is part of XSWD protocol
+// This is part of DWSX protocol
 type EventType string
 
 const (

@@ -65,7 +65,7 @@ DERO : A secure, private blockchain with smart-contracts
 Simulates DERO block single node which helps in development and tests
 
 Usage:
-  simulator [--help] [--version] [--testnet] [--debug] [--noautomine] [--use-xswd] [--sync-node] [--data-dir=<directory>] [--rpc-bind=<127.0.0.1:9999>] [--http-address=<0.0.0.0:8080>] [--clog-level=1] [--flog-level=1]
+  simulator [--help] [--version] [--testnet] [--debug] [--noautomine] [--use-dwsx] [--sync-node] [--data-dir=<directory>] [--rpc-bind=<127.0.0.1:9999>] [--http-address=<0.0.0.0:8080>] [--clog-level=1] [--flog-level=1]
   simulator -h | --help
   simulator --version
 
@@ -75,7 +75,7 @@ Options:
   --testnet  	Run in testnet mode.
   --debug       Debug mode enabled, print more log messages
   --noautomine  No blocks will be mined (except genesis), used for testing, supported only on linux
-  --use-xswd    Use xswd for wallet rpcs
+  --use-dwsx    Use dwsx for wallet rpcs
   --clog-level=1	Set console log level (0 to 127) 
   --flog-level=1	Set file log level (0 to 127)
   --data-dir=<directory>    Store blockchain data at this location
@@ -92,7 +92,7 @@ var rpcport = "127.0.0.1:20000"
 var TRIGGER_MINE_BLOCK string = "/dev/shm/mineblocknow"
 
 const wallet_ports_start = 30000      // all wallets will rpc activated on ports
-const wallet_ports_xswd_start = 40000 // xswd ports used by wallets if enabled
+const wallet_ports_dwsx_start = 40000 // dwsx ports used by wallets if enabled
 // this is a crude function used during tests
 
 func Mine_block_single(chain *blockchain.Blockchain, miner_address rpc.Address) error {

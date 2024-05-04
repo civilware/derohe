@@ -30,8 +30,8 @@ import (
 	"github.com/deroproject/derohe/globals"
 	"github.com/deroproject/derohe/transaction"
 	"github.com/deroproject/derohe/walletapi"
+	"github.com/deroproject/derohe/walletapi/dwsx"
 	"github.com/deroproject/derohe/walletapi/rpcserver"
-	"github.com/deroproject/derohe/walletapi/xswd"
 ) //import "math/big"
 
 const WALLET_PASSWORD = ""
@@ -66,7 +66,7 @@ var wallets_seeds = []string{
 var genesis_wallet *walletapi.Wallet_Disk
 var wallets []*walletapi.Wallet_Disk
 var wallets_rpcservers []*rpcserver.RPCServer
-var wallets_xswdservers []*xswd.XSWD
+var wallets_dwsxservers []*dwsx.DWSX
 
 func create_wallet(name string, seed string) (wallet *walletapi.Wallet_Disk) {
 
@@ -121,12 +121,12 @@ func register_wallets(chain *blockchain.Blockchain) {
 		wallets[i].SetDaemonAddress(rpcport)
 		wallets[i].SetOnlineMode() // make wallet connect to daemon
 
-		if v, ok := globals.Arguments["--use-xswd"]; ok && v.(bool) {
-			// XSWD server accept everything by default
-			xswd.NewXSWDServerWithPort(wallet_ports_xswd_start+i, wallets[i], false, func(app *xswd.ApplicationData) bool {
+		if v, ok := globals.Arguments["--use-dwsx"]; ok && v.(bool) {
+			// DWSX server accept everything by default
+			dwsx.NewDWSXServerWithPort(wallet_ports_dwsx_start+i, wallets[i], false, func(app *dwsx.ApplicationData) bool {
 				return true
-			}, func(app *xswd.ApplicationData, request *jrpc2.Request) xswd.Permission {
-				return xswd.Allow
+			}, func(app *dwsx.ApplicationData, request *jrpc2.Request) dwsx.Permission {
+				return dwsx.Allow
 			})
 		}
 
@@ -148,7 +148,7 @@ func stop_rpcs() {
 		go r.RPCServer_Stop()
 	}
 
-	for _, r := range wallets_xswdservers {
+	for _, r := range wallets_dwsxservers {
 		go r.Stop()
 	}
 }

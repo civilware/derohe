@@ -33,10 +33,10 @@ import (
 	"github.com/deroproject/derohe/globals"
 	"github.com/deroproject/derohe/rpc"
 	"github.com/deroproject/derohe/transaction"
-	"github.com/deroproject/derohe/walletapi/xswd"
+	"github.com/deroproject/derohe/walletapi/dwsx"
 )
 
-var xswd_server *xswd.XSWD
+var dwsx_server *dwsx.DWSX
 
 //import "github.com/deroproject/derohe/address"
 
@@ -68,11 +68,11 @@ func display_easymenu_post_open_command(l *readline.Instance) {
 		io.WriteString(w, "\t\033[1m13\033[0m\tShow transaction history\n")
 		io.WriteString(w, "\t\033[1m14\033[0m\tRescan transaction history\n")
 		io.WriteString(w, "\t\033[1m15\033[0m\tExport all transaction history in json format\n")
-		if xswd_server == nil {
-			io.WriteString(w, "\t\033[1m16\033[0m\tStart XSWD Server\n")
+		if dwsx_server == nil {
+			io.WriteString(w, "\t\033[1m16\033[0m\tStart DWSX Server\n")
 		} else {
-			io.WriteString(w, "\t\033[1m16\033[0m\tStop XSWD Server\n")
-			io.WriteString(w, "\t\033[1m17\033[0m\tList XSWD Applications\n")
+			io.WriteString(w, "\t\033[1m16\033[0m\tStop DWSX Server\n")
+			io.WriteString(w, "\t\033[1m17\033[0m\tList DWSX Applications\n")
 		}
 	}
 
@@ -514,32 +514,32 @@ func handle_easymenu_post_open_command(l *readline.Instance, line string) (proce
 				logger.Info("successfully exported history", "file", filename)
 			}
 		}
-	case "16": // start/stop xswd server
-		if xswd_server != nil {
-			xswd_server.Stop()
-			xswd_server = nil
+	case "16": // start/stop dwsx server
+		if dwsx_server != nil {
+			dwsx_server.Stop()
+			dwsx_server = nil
 			break
 		}
 
-		// NewXSWDServer default behavior is to Ask permission for all requests
-		xswd_server = xswd.NewXSWDServer(wallet, func(ad *xswd.ApplicationData) bool {
-			// xswd logger informs if app is requesting permissions upon connection or if app is already connected
-			return ReadStringXSWDPrompt(l, ad.OnClose, fmt.Sprintf("Allow application %s (%s) to access your wallet (y/N): ", ad.Name, ad.Url), []string{"Y", "N"}) == "Y"
-		}, func(ad *xswd.ApplicationData, r *jrpc2.Request) xswd.Permission {
+		// NewDWSXServer default behavior is to Ask permission for all requests
+		dwsx_server = dwsx.NewDWSXServer(wallet, func(ad *dwsx.ApplicationData) bool {
+			// dwsx logger informs if app is requesting permissions upon connection or if app is already connected
+			return ReadStringDWSXPrompt(l, ad.OnClose, fmt.Sprintf("Allow application %s (%s) to access your wallet (y/N): ", ad.Name, ad.Url), []string{"Y", "N"}) == "Y"
+		}, func(ad *dwsx.ApplicationData, r *jrpc2.Request) dwsx.Permission {
 			return AskPermissionForRequest(l, ad, r)
 		})
 		// check if start was successful
 		time.Sleep(time.Second)
-		if !xswd_server.IsRunning() {
-			xswd_server = nil
+		if !dwsx_server.IsRunning() {
+			dwsx_server = nil
 		}
 	case "17":
-		if xswd_server == nil {
-			logger.Error(nil, "XSWD server is not running")
+		if dwsx_server == nil {
+			logger.Error(nil, "DWSX server is not running")
 			break
 		}
-		apps := xswd_server.GetApplications()
-		logger.Info(fmt.Sprintf("XSWD Applications (%d):", len(apps)))
+		apps := dwsx_server.GetApplications()
+		logger.Info(fmt.Sprintf("DWSX Applications (%d):", len(apps)))
 		for _, app := range apps {
 			logger.Info("Application", "id", app.Id, "name", app.Name, "description", app.Description, "url", app.Url)
 			for name, perm := range app.Permissions {

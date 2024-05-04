@@ -1,4 +1,4 @@
-package xswd
+package dwsx
 
 import (
 	"context"
@@ -25,8 +25,8 @@ type Signature_Result struct {
 
 func HasMethod(ctx context.Context, p HasMethod_Params) bool {
 	w := rpcserver.FromContext(ctx)
-	xswd := w.Extra["xswd"].(*XSWD)
-	_, ok := xswd.rpcHandler[p.Name]
+	dwsx := w.Extra["dwsx"].(*DWSX)
+	_, ok := dwsx.rpcHandler[p.Name]
 	return ok
 }
 
@@ -61,13 +61,13 @@ func Unsubscribe(ctx context.Context, p Subscribe_Params) bool {
 // SignData returned as DERO signed message
 func SignData(ctx context.Context, p []byte) (signed []byte, err error) {
 	w := rpcserver.FromContext(ctx)
-	xswd := w.Extra["xswd"].(*XSWD)
-	if xswd.wallet == nil {
-		err = fmt.Errorf("XSWD could not sign data")
+	dwsx := w.Extra["dwsx"].(*DWSX)
+	if dwsx.wallet == nil {
+		err = fmt.Errorf("DWSX could not sign data")
 		return
 	}
 
-	signed = xswd.wallet.SignData(p)
+	signed = dwsx.wallet.SignData(p)
 
 	return
 }
@@ -75,15 +75,15 @@ func SignData(ctx context.Context, p []byte) (signed []byte, err error) {
 // CheckSignature of DERO signed message
 func CheckSignature(ctx context.Context, p []byte) (result Signature_Result, err error) {
 	w := rpcserver.FromContext(ctx)
-	xswd := w.Extra["xswd"].(*XSWD)
-	if xswd.wallet == nil {
-		err = fmt.Errorf("XSWD could not check signature")
+	dwsx := w.Extra["dwsx"].(*DWSX)
+	if dwsx.wallet == nil {
+		err = fmt.Errorf("DWSX could not check signature")
 		return
 	}
 
 	var address *rpc.Address
 	var messageBytes []byte
-	address, messageBytes, err = xswd.wallet.CheckSignature(p)
+	address, messageBytes, err = dwsx.wallet.CheckSignature(p)
 	if err != nil {
 		return
 	}
@@ -99,7 +99,7 @@ func GetDaemon(ctx context.Context) (result string, err error) {
 	if walletapi.Daemon_Endpoint_Active != "" {
 		result = walletapi.Daemon_Endpoint_Active
 	} else {
-		err = fmt.Errorf("XSWD could not get daemon endpoint from wallet")
+		err = fmt.Errorf("DWSX could not get daemon endpoint from wallet")
 	}
 
 	return

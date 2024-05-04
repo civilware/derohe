@@ -34,7 +34,7 @@ import (
 	"github.com/deroproject/derohe/globals"
 	"github.com/deroproject/derohe/rpc"
 	"github.com/deroproject/derohe/walletapi"
-	"github.com/deroproject/derohe/walletapi/xswd"
+	"github.com/deroproject/derohe/walletapi/dwsx"
 )
 
 //import "io/ioutil"
@@ -821,7 +821,7 @@ func ConfirmYesNoDefaultNo(l *readline.Instance, prompt_temporary string) bool {
 	return false
 }
 
-func ReadStringXSWDPrompt(l *readline.Instance, onClose chan bool, prompt string, values []string) (a string) {
+func ReadStringDWSXPrompt(l *readline.Instance, onClose chan bool, prompt string, values []string) (a string) {
 	prompt_mutex.Lock()
 
 	conf := l.GenPasswordConfig()
@@ -842,7 +842,7 @@ func ReadStringXSWDPrompt(l *readline.Instance, onClose chan bool, prompt string
 			color = color_red
 		}
 
-		l.SetPrompt(fmt.Sprintf("%sXSWD: %s", color, prompt))
+		l.SetPrompt(fmt.Sprintf("%sDWSX: %s", color, prompt))
 		l.Refresh()
 
 		return nil, 0, false
@@ -893,20 +893,20 @@ func ReadStringXSWDPrompt(l *readline.Instance, onClose chan bool, prompt string
 }
 
 // Ask permission for request
-func AskPermissionForRequest(l *readline.Instance, app *xswd.ApplicationData, request *jrpc2.Request) xswd.Permission {
+func AskPermissionForRequest(l *readline.Instance, app *dwsx.ApplicationData, request *jrpc2.Request) dwsx.Permission {
 	values := []string{"A", "D", "AA", "AD"}
 	param := strings.ReplaceAll(strings.Join(strings.Fields(request.ParamString()), " "), "\n", " ")
-	line := ReadStringXSWDPrompt(l, app.OnClose, fmt.Sprintf("Request from %s: %s | Params: %s | Do you want to allow this request ? ([A]llow / [D]eny / [AA] Always Allow / [AD] Always Deny): ", app.Name, request.Method(), param), values)
+	line := ReadStringDWSXPrompt(l, app.OnClose, fmt.Sprintf("Request from %s: %s | Params: %s | Do you want to allow this request ? ([A]llow / [D]eny / [AA] Always Allow / [AD] Always Deny): ", app.Name, request.Method(), param), values)
 
 	if strings.ToUpper(strings.TrimSpace(line)) == "A" {
-		return xswd.Allow
+		return dwsx.Allow
 	} else if strings.ToUpper(strings.TrimSpace(line)) == "AA" {
-		return xswd.AlwaysAllow
+		return dwsx.AlwaysAllow
 	} else if strings.ToUpper(strings.TrimSpace(line)) == "AD" {
-		return xswd.AlwaysDeny
+		return dwsx.AlwaysDeny
 	}
 
-	return xswd.Deny
+	return dwsx.Deny
 }
 
 // confirms whether user knows the current password for the wallet

@@ -1,4 +1,4 @@
-package xswd
+package dwsx
 
 import (
 	"context"
@@ -21,10 +21,12 @@ import (
 	"github.com/ybbus/jsonrpc"
 )
 
-// Test ApplicationData
-// Applications 0 to 6 are valid apps and above is invalid,
+//
+
 const validTo = 7
 
+// Test AppData
+// Apps 0 to 6 are valid apps and above validTo are invalid,
 // 1 and 2 have valid permission requests that will be set,
 // 3 has valid and invalid permissions requested,
 // 5 and 6 have conflicting permissions, the other valid apps should default to Ask
@@ -96,7 +98,7 @@ OTllNGE1ZTA4N2UzNjBkNw==
 			"Engram":         Allow,
 			"Netrunner":      Deny,
 			"Artificer":      Ask,
-			"GetDaemon":      AlwaysAllow, // Only store methods from rpcserver/xswd
+			"GetDaemon":      AlwaysAllow, // Only store methods from rpcserver/dwsx
 			"SignData":       AlwaysAllow,
 			"CheckSignature": AlwaysAllow,
 		},
@@ -369,16 +371,16 @@ NzIzOWYzZTYwY2ZiYzNlMw==
 	{},
 }
 
-// Test data from walletapi for XSWD wallet test
+// Test wallet data from walletapi for DWSX wallet test
 var testWalletData = []struct {
-	name       string
+	lang       string
 	seed       string
 	secret_key string
 	public_key string
 	Address    string
 }{
 	{
-		name:       "English",
+		lang:       "English",
 		seed:       "sequence atlas unveil summon pebbles tuesday beer rudely snake rockets different fuselage woven tagged bested dented vegan hover rapid fawns obvious muppet randomly seasons randomly",
 		secret_key: "b0ef6bd527b9b23b9ceef70dc8b4cd1ee83ca14541964e764ad23f5151204f0f",
 		public_key: "09d704feec7161952a952f306cd96023810c6788478a1c9fc50e7281ab7893ac01",
@@ -394,119 +396,161 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
-// TestXSWDServer tests request using each permission type inside requestHandler and invalid method
-func TestXSWDServer(t *testing.T) {
+// TestDWSXServer tests request using each permission type inside requestHandler and invalid method
+func TestDWSXServer(t *testing.T) {
 	// Simulate user denying the application connection request for Disconnected tests
-	appHandler := false
+	var userApproval, userPort bool = false, false
 
 	// Using Allow permission request, in Disconnected tests it should fail before it is requested
-	requestHandler := Allow
+	var appRequest Permission = Allow
 
-	// Create XSWD server
+	// Create DWSX server
 	var err error
-	var server = &XSWD{}
-	assert.False(t, server.IsRunning(), "XSWD server should not be running and is")
-	// Using NewXSWDServer, which defaults all permissions to Ask
-	_, server, err = testNewXSWDServer(t, false, appHandler, requestHandler)
-	assert.NoErrorf(t, err, "testNewXSWDServer should not error: %s", err)
+	var server = &DWSX{}
+	assert.False( // is the server running?
+		t,
+		server.IsRunning(),
+		"DWSX server should not be running and is",
+	)
+	// Using NewDWSXServer, which defaults all permissions to Ask
+	wallet, server, err := newDWSXServer(
+		t,
+		userPort,     // false
+		userApproval, // false
+		appRequest,   // Asking for User to Allow
+	)
+
+	// check for err in operation
+	assert.NoErrorf(
+		t,
+		err,
+		"newDWSXServer should not error: %s",
+		err,
+	)
+
+	// check wallet for err
+	assert.Exactly(
+		t,
+		wallet.Error,
+		nil,
+	)
+
 	// Stop server and ensure it is not running
 	defer func() {
 		server.Stop()
-		assert.False(t, server.IsRunning(), "XSWD server should not be running and is")
+		assert.False(t, server.IsRunning(), "DWSX server should not be running and is")
 	}()
 
 	// Tests requests made when application is not connected to the server
-	t.Run("Disconnected", func(t *testing.T) {
-		assert.Len(t, server.GetApplications(), 0, "There should be no applications")
-		// Loop through testAppData. 0-6 are valid apps, above is not
-		for i, app := range testAppData {
-			// Create a websocket client to connect to the server
-			conn, err := testCreateClient(nil)
-			assert.NoErrorf(t, err, "Application %d failed to dial server: %s", i, err)
-
-			// Send ApplicationData to server
-			err = conn.WriteJSON(app)
-			assert.NoErrorf(t, err, "Application %d failed to write data to server: %s", i, err)
-
-			authResponse := testHandleAuthResponse(t, conn)
-			t.Logf("Authorization %d response: %v", i, authResponse.Message)
-			assert.False(t, authResponse.Accepted, "Application %d should not be accepted and is", i)
-
-			// Was application added to the server
-			assert.Len(t, server.GetApplications(), 0, "Application %d should not be present and is", i)
-
-			// // Request 1
-			t.Run("Request1", func(t *testing.T) {
-				// GetAddress should fail as our connection request had not been accepted
-				request1 := jsonrpc.RPCRequest{
-					JSONRPC: "2.0",
-					ID:      1,
-					Method:  "GetAddress",
-				}
-				response1, serverErr, err := testXSWDCall(t, conn, request1)
-				assert.Error(t, err, "Request 1 %q should give error when not connected with application %d", request1.Method, i)
-				assert.NotNil(t, response1, "Response 1 should not be nil when not connected")
-				assert.Nil(t, serverErr, "Response 1 should not have error: %v", serverErr)
-			})
-
-			// // Request 2
-			t.Run("Request2", func(t *testing.T) {
-				// DERO.Ping should fail as our connection request had not been accepted
-				request2 := jsonrpc.RPCRequest{
-					JSONRPC: "2.0",
-					ID:      1,
-					Method:  "DERO.Ping",
-				}
-				err = conn.WriteJSON(request2)
-				assert.Error(t, err, "Request 2 %q should give error when not connected with application %d", request2.Method, i)
-			})
-
-			// // Request 3
-			t.Run("Request3", func(t *testing.T) {
-				// Invalid json data
-				request3 := jsonrpc.RPCRequest{
-					JSONRPC: "request",
-					ID:      9,
-					Method:  "GetAddress",
-				}
-				err = conn.WriteJSON(request3)
-				assert.Error(t, err, "Request 3 %q should give error when not connected with application %d", request3.Method, i)
-			})
-
-			// // Request 4
-			t.Run("Request4", func(t *testing.T) {
-				// QueryKey should fail as our connection request had not been accepted
-				request4 := jsonrpc.RPCRequest{
-					JSONRPC: "2.0",
-					ID:      1,
-					Method:  "QueryKey",
-				}
-				err = conn.WriteJSON(request4)
-				assert.Error(t, err, "Request 4 %q should give error when not connected with application %d", request4.Method, i)
-			})
-
-			// // Request 5 request
-			t.Run("Request5", func(t *testing.T) {
-				somedata := []byte(app.Id)
-				// SignData should fail as our connection request had not been accepted
-				request5 := jsonrpc.RPCRequest{
-					JSONRPC: "2.0",
-					ID:      1,
-					Method:  "SignData",
-					Params:  somedata,
-				}
-				err = conn.WriteJSON(request5)
-				assert.Error(t, err, "Request 5 %q should give error when not connected with application %d", request5.Method, i)
-			})
-
-			// Close the app connection
-			conn.Close()
-			time.Sleep(10 * time.Millisecond)
-
-			// Ensure there is no apps as connection was closed
+	t.Run(
+		"Disconnected",
+		func(t *testing.T) {
 			assert.Len(t, server.GetApplications(), 0, "There should be no applications")
-		}
-	})
+			// Loop through testAppData. 0-6 are valid apps, above is not
+			for i, app := range testAppData {
+				// Create a websocket client to connect to the server
+				conn, err := testCreateClient(nil)
+				assert.NoErrorf(t, err, "Application %d failed to dial server: %s", i, err)
+
+				// Send ApplicationData to server
+				err = conn.WriteJSON(app)
+				assert.NoErrorf(t, err, "Application %d failed to write data to server: %s", i, err)
+
+				authResponse := testHandleAuthResponse(t, conn)
+				t.Logf("Authorization %d response: %v", i, authResponse.Message)
+				assert.False(t, authResponse.Accepted, "Application %d should not be accepted and is", i)
+
+				// Was application added to the server
+				assert.Len(t, server.GetApplications(), 0, "Application %d should not be present and is", i)
+
+				// // Request 1
+				t.Run(
+					"Request1",
+					func(t *testing.T) {
+						// GetAddress should fail as our connection request had not been accepted
+						request1 := jsonrpc.RPCRequest{
+							JSONRPC: "2.0",
+							ID:      1,
+							Method:  "GetAddress",
+						}
+						response1, serverErr, err := testDWSXCall(t, conn, request1)
+						assert.Error(t, err, "Request 1 %q should give error when not connected with application %d", request1.Method, i)
+						assert.NotNil(t, response1, "Response 1 should not be nil when not connected")
+						assert.Nil(t, serverErr, "Response 1 should not have error: %v", serverErr)
+					},
+				)
+
+				// // Request 2
+				t.Run(
+					"Request2",
+					func(t *testing.T) {
+						// DERO.Ping should fail as our connection request had not been accepted
+						request2 := jsonrpc.RPCRequest{
+							JSONRPC: "2.0",
+							ID:      1,
+							Method:  "DERO.Ping",
+						}
+						err = conn.WriteJSON(request2)
+						assert.Error(t, err, "Request 2 %q should give error when not connected with application %d", request2.Method, i)
+					},
+				)
+
+				// // Request 3
+				t.Run(
+					"Request3",
+					func(t *testing.T) {
+						// Invalid json data
+						request3 := jsonrpc.RPCRequest{
+							JSONRPC: "request",
+							ID:      9,
+							Method:  "GetAddress",
+						}
+						err = conn.WriteJSON(request3)
+						assert.Error(t, err, "Request 3 %q should give error when not connected with application %d", request3.Method, i)
+					},
+				)
+
+				// // Request 4
+				t.Run(
+					"Request4",
+					func(t *testing.T) {
+						// QueryKey should fail as our connection request had not been accepted
+						request4 := jsonrpc.RPCRequest{
+							JSONRPC: "2.0",
+							ID:      1,
+							Method:  "QueryKey",
+						}
+						err = conn.WriteJSON(request4)
+						assert.Error(t, err, "Request 4 %q should give error when not connected with application %d", request4.Method, i)
+					},
+				)
+
+				// // Request 5 request
+				t.Run(
+					"Request5",
+					func(t *testing.T) {
+						somedata := []byte(app.Id)
+						// SignData should fail as our connection request had not been accepted
+						request5 := jsonrpc.RPCRequest{
+							JSONRPC: "2.0",
+							ID:      1,
+							Method:  "SignData",
+							Params:  somedata,
+						}
+						err = conn.WriteJSON(request5)
+						assert.Error(t, err, "Request 5 %q should give error when not connected with application %d", request5.Method, i)
+					},
+				)
+
+				// Close the app connection
+				conn.Close()
+				time.Sleep(10 * time.Millisecond)
+
+				// Ensure there is no apps as connection was closed
+				assert.Len(t, server.GetApplications(), 0, "There should be no applications")
+			}
+		},
+	)
 
 	// Tests requests while connected using each permission type inside requestHandler and invalid data requests
 	t.Run("Connected", func(t *testing.T) {
@@ -547,7 +591,7 @@ func TestXSWDServer(t *testing.T) {
 			// // Request 0
 			t.Run("Request0", func(t *testing.T) {
 				// Echo should return successfully as requestHandler is Allow
-				params0 := []string{"DERO", "Test", "XSWD"}
+				params0 := []string{"DERO", "Test", "DWSX"}
 				request0 := jsonrpc.RPCRequest{
 					JSONRPC: "2.0",
 					ID:      1,
@@ -555,7 +599,7 @@ func TestXSWDServer(t *testing.T) {
 					Params:  params0,
 				}
 
-				response0, serverErr, err := testXSWDCall(t, conn, request0)
+				response0, serverErr, err := testDWSXCall(t, conn, request0)
 				assert.NoErrorf(t, err, "Request 0 %q on application %d should not error: %s", request0.Method, i, err)
 				assert.NotNil(t, response0, "Response 0 on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 0 on application %d should not have error: %v", i, serverErr)
@@ -571,7 +615,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "GetAddress",
 				}
 
-				response1, serverErr, err := testXSWDCall(t, conn, request1)
+				response1, serverErr, err := testDWSXCall(t, conn, request1)
 				assert.NoErrorf(t, err, "Request 1 %q on application %d should not error: %s", request1.Method, i, err)
 				assert.NotNil(t, response1, "Response 1 on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 1 on application %d should not have error: %v", i, serverErr)
@@ -590,7 +634,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "GetHeight",
 				}
 
-				response2a, serverErr, err := testXSWDCall(t, conn, request2a)
+				response2a, serverErr, err := testDWSXCall(t, conn, request2a)
 				assert.NoErrorf(t, err, "Request 2a %q on application %d should not error: %s", request2a.Method, i, err)
 				assert.NotNil(t, response2a, "Response 2a on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 2a on application %d should have error as permission was Deny: %v", i, serverErr)
@@ -602,7 +646,7 @@ func TestXSWDServer(t *testing.T) {
 					ID:      1,
 					Method:  "QueryKey",
 				}
-				response2b, serverErr, err := testXSWDCall(t, conn, request2b)
+				response2b, serverErr, err := testDWSXCall(t, conn, request2b)
 				assert.NoErrorf(t, err, "Request 2b %q on application %d should not error: %s", request2b.Method, i, err)
 				assert.NotNil(t, response2b, "Response 2b on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 2b on application %d should have error as permission was Deny: %v", i, serverErr)
@@ -631,7 +675,7 @@ func TestXSWDServer(t *testing.T) {
 				}
 
 				// Call once to set AlwaysAllow
-				response3a, serverErr, err := testXSWDCall(t, conn, request3)
+				response3a, serverErr, err := testDWSXCall(t, conn, request3)
 				assert.NoErrorf(t, err, "Request 3a %q on application %d should not error: %s", request3.Method, i, err)
 				assert.NotNil(t, response3a, "Response 3a on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 3a on application %d should not have error: %v", i, serverErr)
@@ -639,7 +683,7 @@ func TestXSWDServer(t *testing.T) {
 				// Set requestHandler to Deny but should be successful if called again as was AlwaysAllowed
 				server.requestHandler = func(app *ApplicationData, request *jrpc2.Request) Permission { return Deny }
 				// Call again
-				response3b, serverErr, err := testXSWDCall(t, conn, request3)
+				response3b, serverErr, err := testDWSXCall(t, conn, request3)
 				assert.NoErrorf(t, err, "Request 3b %q on application %d should not error: %s", request3.Method, i, err)
 				assert.NotNil(t, response3b, "Response 3b on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 3b on application %d should not have error: %v", i, serverErr)
@@ -656,7 +700,7 @@ func TestXSWDServer(t *testing.T) {
 				}
 
 				// Call and set AlwaysDeny
-				response4a, serverErr, err := testXSWDCall(t, conn, request4)
+				response4a, serverErr, err := testDWSXCall(t, conn, request4)
 				assert.NoErrorf(t, err, "Request 4a %q on application %d should not error: %s", request4.Method, i, err)
 				assert.NotNil(t, response4a, "Response 4a on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 4a on application %d should have error as permission was AlwaysDeny: %v", i, serverErr)
@@ -665,7 +709,7 @@ func TestXSWDServer(t *testing.T) {
 				// Set requestHandler to Allow but should not be successful if called again as was AlwaysDenied
 				server.requestHandler = func(app *ApplicationData, request *jrpc2.Request) Permission { return Allow }
 				// Call again
-				response4b, serverErr, err := testXSWDCall(t, conn, request4)
+				response4b, serverErr, err := testDWSXCall(t, conn, request4)
 				assert.NoErrorf(t, err, "Request 4b %q on application %d should not error: %s", request4.Method, i, err)
 				assert.NotNil(t, response4b, "Response 4b on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 4a on application %d should have error as permission was AlwaysDeny: %v", i, serverErr)
@@ -682,7 +726,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "GetHeight",
 				}
 
-				response5, serverErr, err := testXSWDCall(t, conn, request5)
+				response5, serverErr, err := testDWSXCall(t, conn, request5)
 				assert.NoErrorf(t, err, "Request 5 %q on application %d should not error: %s", request5.Method, i, err)
 				assert.NotNil(t, response5, "Response 5 on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 5 on application %d should have error as permission was Ask: %v", i, serverErr)
@@ -698,7 +742,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "SomeInvalidMethodName", // Invalid method
 				}
 
-				response6, serverErr, err := testXSWDCall(t, conn, request6)
+				response6, serverErr, err := testDWSXCall(t, conn, request6)
 				assert.NoErrorf(t, err, "Request 6 %q on application %d should not error: %s", request6.Method, i, err)
 				assert.NotNil(t, response6, "Response 6 on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 6 on application %d should have error as method was invalid: %v", i, serverErr)
@@ -733,7 +777,7 @@ func TestXSWDServer(t *testing.T) {
 				server.requestHandler = func(app *ApplicationData, request *jrpc2.Request) Permission { return Allow }
 
 				// Call HasMethod on the added method
-				response8a, serverErr, err := testXSWDCall(t, conn, request8a)
+				response8a, serverErr, err := testDWSXCall(t, conn, request8a)
 				assert.NoErrorf(t, err, "Request 8a %q on application %d should not error: %s", request8a.Method, i, err)
 				assert.NotNil(t, response8a, "Response 8a on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 8a on application %d should not have error: %v", i, serverErr)
@@ -749,7 +793,7 @@ func TestXSWDServer(t *testing.T) {
 					Params:  methodName,
 				}
 
-				response8b, serverErr, err := testXSWDCall(t, conn, request8b)
+				response8b, serverErr, err := testDWSXCall(t, conn, request8b)
 				assert.NoErrorf(t, err, "Request 8b %q on application %d should not error: %s", request8b.Method, i, err)
 				assert.NotNil(t, response8b, "Response 8b on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 8b on application %d should not have error: %v", i, serverErr)
@@ -768,7 +812,7 @@ func TestXSWDServer(t *testing.T) {
 					ID:      9,
 					Method:  "GetAddress",
 				}
-				response9, serverErr, err := testXSWDCall(t, conn, request9)
+				response9, serverErr, err := testDWSXCall(t, conn, request9)
 				assert.NoErrorf(t, err, "Request 9 %q on application %d should not error: %s", request9.Method, i, err)
 				assert.NotNil(t, response9, "Response 9 on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 9 on application %d should have error: %v", i, serverErr)
@@ -788,7 +832,7 @@ func TestXSWDServer(t *testing.T) {
 					Fees:      0,
 					Signer:    "DERO",
 				}
-				response10, serverErr, err := testXSWDCall(t, conn, request10)
+				response10, serverErr, err := testDWSXCall(t, conn, request10)
 				assert.NoErrorf(t, err, "Request 10 on application %d should not error: %s", i, err)
 				assert.NotNil(t, response10, "Result 10 on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Result 10 on application %d should have error: %v", i, serverErr)
@@ -799,7 +843,7 @@ func TestXSWDServer(t *testing.T) {
 			t.Run("Request11", func(t *testing.T) {
 				// More invalid data
 				request11 := "thisisainvalidrequest"
-				response11, serverErr, err := testXSWDCall(t, conn, request11)
+				response11, serverErr, err := testDWSXCall(t, conn, request11)
 				assert.NoErrorf(t, err, "Request 11 on application %d should not error: %s", i, err)
 				assert.NotNil(t, response11, "Result 11 on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Result 11 on application %d should have error: %v", i, serverErr)
@@ -817,7 +861,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "Subscribe",
 					Params:  params12,
 				}
-				response12a, serverErr, err := testXSWDCall(t, conn, request12a)
+				response12a, serverErr, err := testDWSXCall(t, conn, request12a)
 				assert.NoErrorf(t, err, "Request 12a on application %d should not error: %s", i, err)
 				assert.NotNil(t, response12a, "Response 12a on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 12a on application %d should not have error: %v", i, serverErr)
@@ -849,7 +893,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "Unsubscribe",
 					Params:  params12,
 				}
-				response12b, serverErr, err := testXSWDCall(t, conn, request12b)
+				response12b, serverErr, err := testDWSXCall(t, conn, request12b)
 				assert.NoErrorf(t, err, "Request 12b on application %d should not error: %s", i, err)
 				assert.NotNil(t, response12b, "Response 12b on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 12b on application %d should not have error: %v", i, serverErr)
@@ -866,7 +910,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "SignData",
 					Params:  somedata,
 				}
-				response13a, serverErr, err := testXSWDCall(t, conn, request13a)
+				response13a, serverErr, err := testDWSXCall(t, conn, request13a)
 				assert.NoErrorf(t, err, "Request 13a %q on application %d should not error: %s", request13a.Method, i, err)
 				assert.NotNil(t, response13a, "Response 13a on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 13a on application %d should not have error: %v", i, serverErr)
@@ -881,7 +925,7 @@ func TestXSWDServer(t *testing.T) {
 				assert.Equal(t, testWalletData[0].Address, signer.String(), "Signers walletapi %d does not match %s: %s", i, testWalletData[0].Address, signer.String())
 				assert.Equal(t, somedata, message, "Signed walletapi messages %d do not match %s: %s", i, somedata, message)
 
-				// Test XSWD CheckSignature result matches walletapi results
+				// Test DWSX CheckSignature result matches walletapi results
 				var result13b Signature_Result
 				request13b := jsonrpc.RPCRequest{
 					JSONRPC: "2.0",
@@ -889,7 +933,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "CheckSignature",
 					Params:  decodeString,
 				}
-				response13b, serverErr, err := testXSWDCall(t, conn, request13b)
+				response13b, serverErr, err := testDWSXCall(t, conn, request13b)
 				assert.NoErrorf(t, err, "Request 13b %q on application %d should not error: %s", request13b.Method, i, err)
 				assert.NotNil(t, response13b, "Response 13b on application %d should not be nil", i)
 				assert.Nil(t, serverErr, "Response 13b on application %d should not have error: %v", i, serverErr)
@@ -904,7 +948,7 @@ func TestXSWDServer(t *testing.T) {
 
 				// Test CheckSignature with invalid signature
 				request13b.Params = []byte("not a valid signature")
-				response13c, serverErr, err := testXSWDCall(t, conn, request13b)
+				response13c, serverErr, err := testDWSXCall(t, conn, request13b)
 				assert.NoErrorf(t, err, "Request 13c %q on application %d should not error: %s", request13b.Method, i, err)
 				assert.NotNil(t, response13c, "Response 13c on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 13c on application %d should have error: %v", i, serverErr)
@@ -913,7 +957,7 @@ func TestXSWDServer(t *testing.T) {
 				// Test SignData again with Deny permission
 				server.requestHandler = func(app *ApplicationData, request *jrpc2.Request) Permission { return Deny }
 
-				response13d, serverErr, err := testXSWDCall(t, conn, request13a)
+				response13d, serverErr, err := testDWSXCall(t, conn, request13a)
 				assert.NoErrorf(t, err, "Request 13d %q on application %d should not error: %s", request13a.Method, i, err)
 				assert.NotNil(t, response13d, "Response 13d on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 13d on application %d should have error as permission was Deny: %v", i, serverErr)
@@ -924,13 +968,13 @@ func TestXSWDServer(t *testing.T) {
 			t.Run("Request14", func(t *testing.T) {
 				// Allow this request
 				server.requestHandler = func(ad *ApplicationData, r *jrpc2.Request) Permission { return Allow }
-				// Call XSWD GetDaemon expecting to fail as daemon is not connected
+				// Call DWSX GetDaemon expecting to fail as daemon is not connected
 				request14 := jsonrpc.RPCRequest{
 					JSONRPC: "2.0",
 					ID:      1,
 					Method:  "GetDaemon",
 				}
-				response14a, serverErr, err := testXSWDCall(t, conn, request14)
+				response14a, serverErr, err := testDWSXCall(t, conn, request14)
 				assert.NoErrorf(t, err, "Request 14a %q on application %d should not error: %s", request14.Method, i, err)
 				assert.NotNil(t, response14a, "Response 14a on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 14a on application %d should have error: %v", i, serverErr)
@@ -938,7 +982,7 @@ func TestXSWDServer(t *testing.T) {
 
 				// Call again with Deny should fail
 				server.requestHandler = func(ad *ApplicationData, r *jrpc2.Request) Permission { return Deny }
-				response14b, serverErr, err := testXSWDCall(t, conn, request14)
+				response14b, serverErr, err := testDWSXCall(t, conn, request14)
 				assert.NoErrorf(t, err, "Request 14b %q on application %d should not error: %s", request14.Method, i, err)
 				assert.NotNil(t, response14b, "Response 14b on application %d should not be nil", i)
 				assert.Error(t, serverErr, "Response 14b on application %d should have error: %v", i, serverErr)
@@ -1091,7 +1135,7 @@ func TestXSWDServer(t *testing.T) {
 				}
 
 				for i := 0; i < requests; i++ {
-					response1, serverErr, err := testXSWDCall(t, conn1, request1)
+					response1, serverErr, err := testDWSXCall(t, conn1, request1)
 					assert.NoErrorf(t, err, "Request 1 %q should not give error: %s", request1.Method, err)
 					assert.NotNil(t, response1, "Response 1 should not be nil")
 					assert.Nil(t, serverErr, "Response 1 should not have error: %v", serverErr)
@@ -1121,7 +1165,7 @@ func TestXSWDServer(t *testing.T) {
 				}
 
 				for i := 0; i < requests; i++ {
-					response2, serverErr, err := testXSWDCall(t, conn2, request2)
+					response2, serverErr, err := testDWSXCall(t, conn2, request2)
 					assert.NoErrorf(t, err, "Request 2 %q should not give error: %s", request2.Method, err)
 					assert.NotNil(t, response2, "Response 2 should not be nil")
 					assert.Nil(t, serverErr, "Response 2 should not have error: %v", serverErr)
@@ -1145,7 +1189,7 @@ func TestXSWDServer(t *testing.T) {
 				authResponse := testHandleAuthResponse(t, conn3)
 				assert.True(t, authResponse.Accepted, "Application should be accepted and is not")
 				// Echo should succeed
-				params3 := []string{"DERO", "Test", "XSWD"}
+				params3 := []string{"DERO", "Test", "DWSX"}
 				request3 := jsonrpc.RPCRequest{
 					JSONRPC: "2.0",
 					ID:      1,
@@ -1154,7 +1198,7 @@ func TestXSWDServer(t *testing.T) {
 				}
 
 				for i := 0; i < requests; i++ {
-					response3, serverErr, err := testXSWDCall(t, conn3, request3)
+					response3, serverErr, err := testDWSXCall(t, conn3, request3)
 					assert.NoErrorf(t, err, "Request 3 %q should not error: %s", request3.Method, err)
 					assert.NotNil(t, response3, "Response 3 should not be nil")
 					assert.Nil(t, serverErr, "Response 3 should not have error: %v", serverErr)
@@ -1184,7 +1228,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "Subscribe",
 					Params:  Subscribe_Params{Event: rpc.NewTopoheight},
 				}
-				response4, serverErr, err := testXSWDCall(t, conn4, subscribe)
+				response4, serverErr, err := testDWSXCall(t, conn4, subscribe)
 				assert.NoErrorf(t, err, "Request 4 should not error: %s", err)
 				assert.NotNil(t, response4, "Response 4 should not be nil")
 				assert.Nil(t, serverErr, "Response 4 should not have error: %v", serverErr)
@@ -1198,7 +1242,7 @@ func TestXSWDServer(t *testing.T) {
 				authResponse = testHandleAuthResponse(t, conn6)
 				assert.True(t, authResponse.Accepted, "Application should be accepted and is not")
 
-				response6, serverErr, err := testXSWDCall(t, conn6, subscribe)
+				response6, serverErr, err := testDWSXCall(t, conn6, subscribe)
 				assert.NoErrorf(t, err, "Request 6 should not error: %s", err)
 				assert.NotNil(t, response6, "Response 6 should not be nil")
 				assert.Nil(t, serverErr, "Response 6 should not have error: %v", serverErr)
@@ -1265,7 +1309,7 @@ func TestXSWDServer(t *testing.T) {
 					Method:  "Subscribe",
 					Params:  Subscribe_Params{Event: rpc.NewEntry},
 				}
-				response5, serverErr, err := testXSWDCall(t, conn5, subscribe)
+				response5, serverErr, err := testDWSXCall(t, conn5, subscribe)
 				assert.NoErrorf(t, err, "Request 5 should not error: %s", err)
 				assert.NotNil(t, response5, "Response 5 should not be nil")
 				assert.Nil(t, serverErr, "Response 5 not have error: %v", serverErr)
@@ -1313,17 +1357,17 @@ func TestXSWDServer(t *testing.T) {
 	})
 }
 
-// TestXSWDServerWithPort tests request with stored permissions and daemon calls
-func TestXSWDServerWithPort(t *testing.T) {
+// TestDWSXServerWithPort tests request with stored permissions and daemon calls
+func TestDWSXServerWithPort(t *testing.T) {
 	// Simulate user accepting the application connection request
 	appHandler := true
 
 	// Deny permission request for these tests, stored permissions
 	requestHandler := Deny
 
-	// Using NewXSWDServerWithPort with !forceAsk to allow storing permission requests
-	_, server, err := testNewXSWDServer(t, true, appHandler, requestHandler)
-	assert.NoErrorf(t, err, "testNewXSWDServer should not error: %s", err)
+	// Using NewDWSXServerWithPort with !forceAsk to allow storing permission requests
+	_, server, err := newDWSXServer(t, true, appHandler, requestHandler)
+	assert.NoErrorf(t, err, "newDWSXServer should not error: %s", err)
 	defer server.Stop()
 
 	// Test that stored permissions are valid
@@ -1420,7 +1464,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "GetAddress",
 			}
-			response0, serverErr, err := testXSWDCall(t, conn, request0)
+			response0, serverErr, err := testDWSXCall(t, conn, request0)
 			assert.NoErrorf(t, err, "Request 0 %q should not give error: %s", request0.Method, err)
 			assert.NotNil(t, response0, "Response 0 should not be nil")
 			assert.Nil(t, serverErr, "Response 0 should not have error: %v", serverErr)
@@ -1434,7 +1478,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "GetHeight",
 			}
-			response1, serverErr, err := testXSWDCall(t, conn, request1)
+			response1, serverErr, err := testDWSXCall(t, conn, request1)
 			assert.NoErrorf(t, err, "Request 1 %q should not give error: %s", request1.Method, err)
 			assert.NotNil(t, response1, "Response 1 should not be nil")
 			assert.Error(t, serverErr, "Response 1 should have error: %v", serverErr)
@@ -1449,7 +1493,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "GetTransfers",
 			}
-			response2, serverErr, err := testXSWDCall(t, conn, request2)
+			response2, serverErr, err := testDWSXCall(t, conn, request2)
 			assert.NoErrorf(t, err, "Request 2 %q should not give error: %s", request2.Method, err)
 			assert.NotNil(t, response2, "Response 2 should not be nil")
 			assert.Error(t, serverErr, "Response 2 should have error: %v", serverErr)
@@ -1464,7 +1508,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "transfer",
 			}
-			response3, serverErr, err := testXSWDCall(t, conn, request3)
+			response3, serverErr, err := testDWSXCall(t, conn, request3)
 			assert.NoErrorf(t, err, "Request 3 %q should not give error: %s", request3.Method, err)
 			assert.NotNil(t, response3, "Response 3 should not be nil")
 			assert.Error(t, serverErr, "Response 3 should have error: %v", serverErr)
@@ -1479,7 +1523,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "GetBalance",
 			}
-			response4, serverErr, err := testXSWDCall(t, conn, request4)
+			response4, serverErr, err := testDWSXCall(t, conn, request4)
 			assert.NoErrorf(t, err, "Request 4 %q should not give error: %s", request4.Method, err)
 			assert.NotNil(t, response4, "Response 4 should not be nil")
 			assert.Error(t, serverErr, "Response 4 should have error: %v", serverErr)
@@ -1494,7 +1538,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "scinvoke",
 			}
-			response5, serverErr, err := testXSWDCall(t, conn, request5)
+			response5, serverErr, err := testDWSXCall(t, conn, request5)
 			assert.NoErrorf(t, err, "Request 5 %q should not give error: %s", request5.Method, err)
 			assert.NotNil(t, response5, "Response 5 should not be nil")
 			assert.Error(t, serverErr, "Response 5 should have error: %v", serverErr)
@@ -1509,7 +1553,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "DERO.Ping",
 			}
-			response6, serverErr, err := testXSWDCall(t, conn, request6)
+			response6, serverErr, err := testDWSXCall(t, conn, request6)
 			assert.NoErrorf(t, err, "Request 6 %q should not give error: %s", request6.Method, err)
 			assert.NotNil(t, response6, "Response 6 should not be nil")
 			assert.Error(t, serverErr, "Response 6 should have error: %v", serverErr)
@@ -1531,7 +1575,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 					Method:  "GetBalance",
 				},
 			}
-			response7, serverErr, err := testXSWDCall(t, conn, request7)
+			response7, serverErr, err := testDWSXCall(t, conn, request7)
 			assert.NoErrorf(t, err, "Request 7 batch should not give error: %s", err)
 			assert.NotNil(t, response7, "Response 7 should not be nil")
 			assert.Error(t, serverErr, "Response 7 should have error: %v", serverErr)
@@ -1559,7 +1603,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 		assert.Len(t, server.GetApplications(), 0, "There should be no applications")
 	})
 
-	// Test daemon calls to XSWD server
+	// Test daemon calls to DWSX server
 	t.Run("Daemon", func(t *testing.T) {
 		var endpoint string
 		var endpoints = []string{"127.0.0.1:10102", "89.38.99.117:10102", "node.derofoundation.org:11012"}
@@ -1595,7 +1639,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "DERO.Ping",
 			}
-			response1, _, err := testXSWDCall(t, conn, request1)
+			response1, _, err := testDWSXCall(t, conn, request1)
 			assert.NoErrorf(t, err, "Request 1 %s should not error: %s", request1.Method, err)
 			js, err := json.Marshal(response1.Result)
 			assert.NoErrorf(t, err, "Response 1 %s marshal should not error: %s", request1.Method, err)
@@ -1613,7 +1657,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "DERO.GetInfo",
 			}
-			response2, _, err := testXSWDCall(t, conn, request2)
+			response2, _, err := testDWSXCall(t, conn, request2)
 			assert.NoErrorf(t, err, "Request 2 %s should not error: %s", request2.Method, err)
 			js, err := json.Marshal(response2.Result)
 			assert.NoErrorf(t, err, "Response 2 %s marshal should not error: %s", request2.Method, err)
@@ -1634,7 +1678,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "DERO.GetHeight",
 			}
-			response3, _, err := testXSWDCall(t, conn, request3)
+			response3, _, err := testDWSXCall(t, conn, request3)
 			assert.NoErrorf(t, err, "Request 3 %s should not error: %s", request3.Method, err)
 			js, err := json.Marshal(response3.Result)
 			assert.NoErrorf(t, err, "Response 3 %s marshal should not error: %s", request3.Method, err)
@@ -1652,7 +1696,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "DERO.GetRandomAddress",
 			}
-			response4, _, err := testXSWDCall(t, conn, request4)
+			response4, _, err := testDWSXCall(t, conn, request4)
 			assert.NoErrorf(t, err, "Request 4 %s should not error: %s", request4.Method, err)
 			js, err := json.Marshal(response4.Result)
 			assert.NoErrorf(t, err, "Response 4 %s marshal should not error: %s", request4.Method, err)
@@ -1669,7 +1713,7 @@ func TestXSWDServerWithPort(t *testing.T) {
 				ID:      1,
 				Method:  "DERO.MethodNotFound",
 			}
-			_, serverErr, err := testXSWDCall(t, conn, request5)
+			_, serverErr, err := testDWSXCall(t, conn, request5)
 			assert.NoErrorf(t, err, "Request 5 %s should not error: %s", request5.Method, err)
 			assert.Equal(t, code.InvalidRequest, serverErr.Code, "Response 5 should be %v: %v", code.InvalidRequest, serverErr.Code)
 		})
@@ -1678,13 +1722,13 @@ func TestXSWDServerWithPort(t *testing.T) {
 		t.Run("Request6", func(t *testing.T) {
 			// Allow this request
 			server.requestHandler = func(ad *ApplicationData, r *jrpc2.Request) Permission { return Allow }
-			// Call XSWD GetDaemon
+			// Call DWSX GetDaemon
 			request6 := jsonrpc.RPCRequest{
 				JSONRPC: "2.0",
 				ID:      1,
 				Method:  "GetDaemon",
 			}
-			response6, serverErr, err := testXSWDCall(t, conn, request6)
+			response6, serverErr, err := testDWSXCall(t, conn, request6)
 			assert.NoErrorf(t, err, "Request 6 %s should not error: %s", request6.Method, err)
 			assert.NotNil(t, response6, "Response 6 should not be nil")
 			assert.Nil(t, serverErr, "Response 6 should not have error: %v", serverErr)
@@ -1695,9 +1739,9 @@ func TestXSWDServerWithPort(t *testing.T) {
 }
 
 // Test client closures when awaiting responses
-func TestXSWDClosures(t *testing.T) {
-	_, server, err := testNewXSWDServer(t, false, true, Allow)
-	assert.NoErrorf(t, err, "testNewXSWDServer should not error: %s", err)
+func TestDWSXClosures(t *testing.T) {
+	_, server, err := newDWSXServer(t, false, true, Allow)
+	assert.NoErrorf(t, err, "newDWSXServer should not error: %s", err)
 	t.Cleanup(server.Stop)
 
 	// Close the client while awaiting permission request
@@ -1728,14 +1772,14 @@ func TestXSWDClosures(t *testing.T) {
 			ID:      1,
 			Method:  "GetAddress",
 		}
-		_, _, err = testXSWDCall(t, conn, request1)
+		_, _, err = testDWSXCall(t, conn, request1)
 		assert.Errorf(t, err, "Request 1a %s should error: %s", request1.Method, err)
 		time.Sleep(time.Millisecond * 10)
 		assert.Len(t, server.applications, 0, "There should be no applications")
 
 		// Simulate a Allow permission and call again, but client should be already closed
 		server.requestHandler = func(ad *ApplicationData, r *jrpc2.Request) Permission { return Allow }
-		_, _, err = testXSWDCall(t, conn, request1)
+		_, _, err = testDWSXCall(t, conn, request1)
 		assert.Errorf(t, err, "Request 1b %s should error: %s", request1.Method, err)
 	})
 
@@ -1771,7 +1815,7 @@ func TestXSWDClosures(t *testing.T) {
 			ID:      1,
 			Method:  "GetAddress",
 		}
-		_, _, err = testXSWDCall(t, conn, request1)
+		_, _, err = testDWSXCall(t, conn, request1)
 		assert.Errorf(t, err, "Request 1 %s should error: %s", request1.Method, err)
 		// Ensure app has been removed
 		assert.Len(t, server.applications, 0, "There should be no applications")
@@ -1781,9 +1825,9 @@ func TestXSWDClosures(t *testing.T) {
 }
 
 // Test stopping the server when awaiting responses
-func TestXSWDStop(t *testing.T) {
-	_, server, err := testNewXSWDServer(t, false, true, Allow)
-	assert.NoErrorf(t, err, "testNewXSWDServer should not error: %s", err)
+func TestDWSXStop(t *testing.T) {
+	_, server, err := newDWSXServer(t, false, true, Allow)
+	assert.NoErrorf(t, err, "newDWSXServer should not error: %s", err)
 	t.Cleanup(server.Stop)
 
 	// Stop the server when awaiting permissions request, app will be removed from deferred x.removeApplicationOfSession in readMessageFromSession
@@ -1817,7 +1861,7 @@ func TestXSWDStop(t *testing.T) {
 			server.Stop()
 		}()
 
-		_, _, err = testXSWDCall(t, conn, request1)
+		_, _, err = testDWSXCall(t, conn, request1)
 		assert.Errorf(t, err, "Request 1 %s should error: %s", request1.Method, err)
 		// Ensure app has been removed
 		assert.Len(t, server.applications, 0, "There should be no applications")
@@ -1828,8 +1872,8 @@ func TestXSWDStop(t *testing.T) {
 	t.Run("Stop2", func(t *testing.T) {
 		assert.Len(t, server.applications, 0, "There should be no applications")
 		if !server.IsRunning() {
-			_, server, err = testNewXSWDServer(t, false, true, Allow)
-			assert.NoErrorf(t, err, "testNewXSWDServer should not error: %s", err)
+			_, server, err = newDWSXServer(t, false, true, Allow)
+			assert.NoErrorf(t, err, "newDWSXServer should not error: %s", err)
 		}
 
 		// Simulate a connection request awaiting user input
@@ -1862,11 +1906,17 @@ func TestXSWDStop(t *testing.T) {
 	assert.Len(t, server.applications, 0, "There should be no applications")
 }
 
-// Create a testnet wallet and start XSWD server for tests
-// If port, server will use NewXSWDServerWithPort w/ !forceAsk, otherwise will use NewXSWDServer
+// Create a testnet wallet and start DWSX server for tests
+// If port, server will use NewDWSXServerWithPort w/ !forceAsk, otherwise will use NewDWSXServer
 // Simulate initial appHandler and requestHandler values
-func testNewXSWDServer(t *testing.T, port, aHandler bool, rHandler Permission) (xswdWallet *walletapi.Wallet_Disk, server *XSWD, err error) {
-	xswdWallet, err = walletapi.Create_Encrypted_Wallet_From_Recovery_Words("xswd_text_wallet.db", "xswd", testWalletData[0].seed)
+func newDWSXServer(t *testing.T, port, aHandler bool, rHandler Permission) (dwsxWallet *walletapi.Wallet_Disk, server *DWSX, err error) {
+	dwsxWallet, err = walletapi.
+		Create_Encrypted_Wallet_From_Recovery_Words(
+			"dwsx_text_wallet.db",
+			"dwsx",
+			testWalletData[0].seed,
+		)
+
 	if err != nil {
 		return
 	}
@@ -1878,14 +1928,14 @@ func testNewXSWDServer(t *testing.T, port, aHandler bool, rHandler Permission) (
 	requestHandler := func(app *ApplicationData, request *jrpc2.Request) Permission { return rHandler }
 
 	if port {
-		// NewXSWDServerWithPort will use !forceAsk to allow permission requests
-		server = NewXSWDServerWithPort(XSWD_PORT, xswdWallet, false, appHandler, requestHandler)
-		t.Logf("Starting NewXSWDServerWithPort: [port: %d, appHandler: %t, requestHandler: %s]", XSWD_PORT, aHandler, rHandler.String())
+		// NewDWSXServerWithPort will use !forceAsk to allow permission requests
+		server = NewDWSXServerWithPort(DWSX_PORT, dwsxWallet, false, appHandler, requestHandler)
+		t.Logf("Starting NewDWSXServerWithPort: [port: %d, appHandler: %t, requestHandler: %s]", DWSX_PORT, aHandler, rHandler.String())
 
 	} else {
-		// NewXSWDServer defaults all permissions to Ask
-		server = NewXSWDServer(xswdWallet, appHandler, requestHandler)
-		t.Logf("Starting NewXSWDServer: [appHandler: %t, requestHandler: %s]", aHandler, rHandler.String())
+		// NewDWSXServer defaults all permissions to Ask
+		server = NewDWSXServer(dwsxWallet, appHandler, requestHandler)
+		t.Logf("Starting NewDWSXServer: [appHandler: %t, requestHandler: %s]", aHandler, rHandler.String())
 	}
 
 	// Wait for the server to start
@@ -1898,15 +1948,14 @@ func testNewXSWDServer(t *testing.T, port, aHandler bool, rHandler Permission) (
 	return
 }
 
-// Create client for XSWD server tests
+// Create client for DWSX server tests
 func testCreateClient(headers http.Header) (conn *websocket.Conn, err error) {
-	u := url.URL{Scheme: "ws", Host: "127.0.0.1:44326", Path: "/xswd"}
+	u := url.URL{Scheme: "ws", Host: "127.0.0.1:44326", Path: "/dwsx"}
 	conn, _, err = websocket.DefaultDialer.Dial(u.String(), headers)
-
-	return
+	return conn, err
 }
 
-// Handle XSWD authentication response for tests
+// Handle DWSX authentication response for tests
 func testHandleAuthResponse(t *testing.T, conn *websocket.Conn) (response AuthorizationResponse) {
 	_, message, err := conn.ReadMessage()
 	if err != nil {
@@ -1921,8 +1970,8 @@ func testHandleAuthResponse(t *testing.T, conn *websocket.Conn) (response Author
 	return
 }
 
-// Call and read test requests to XSWD server
-func testXSWDCall(t *testing.T, conn *websocket.Conn, request interface{}) (response RPCResponse, jrpcErr *jrpc2.Error, err error) {
+// Call and read test requests to DWSX server
+func testDWSXCall(t *testing.T, conn *websocket.Conn, request interface{}) (response RPCResponse, jrpcErr *jrpc2.Error, err error) {
 	method := "unknown"
 	switch r := request.(type) {
 	case jsonrpc.RPCRequest:
