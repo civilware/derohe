@@ -155,7 +155,7 @@ func NewDWSXServerWithPort(
 		}
 	}()
 
-	go dwsx.handler_loop() // handlers.go
+	go dwsx.handleEvents() // handlers.go
 
 	return dwsx
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func (x *DWSX) handler_loop() {
+func (x *DWSX) handleEvents() {
 	for {
 		select {
 		case msg := <-x.requests:
