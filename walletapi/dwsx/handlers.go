@@ -55,7 +55,7 @@ func (x *DWSX) handleRegistration(msg messageRegistration) {
 				Accepted: false,
 			},
 		)
-		x.handleRemoveApplicationOfSession(msg.conn, msg.app)
+		x.handleRemoveApplication(msg.conn, msg.app)
 	}
 }
 
@@ -169,7 +169,7 @@ func (x *DWSX) handleForceAskPermission(app *ApplicationData) (response string, 
 
 // Remove an application from the list for a session
 // only used in internal
-func (x *DWSX) handleRemoveApplicationOfSession(conn *Connection, app *ApplicationData) {
+func (x *DWSX) handleRemoveApplication(conn *Connection, app *ApplicationData) {
 	if app != nil && app.IsRequesting() {
 		x.logger.Info("App is requesting prompt, closing")
 		app.OnClose <- true
@@ -335,7 +335,7 @@ func (x *DWSX) handleRequestPermission(app *ApplicationData, request *jrpc2.Requ
 
 // block until the session is closed and read all its messages
 func (x *DWSX) handleReadMessageFromSession(conn *Connection, app *ApplicationData) {
-	defer x.handleRemoveApplicationOfSession(conn, app)
+	defer x.handleRemoveApplication(conn, app)
 
 	for {
 		// block and read the message bytes from session
